@@ -1,7 +1,7 @@
 {
   "name": "Bookmarks Pro",
   "identifier": "com.amin.bookmarks",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Press B to bookmark the current position. Press N to see your bookmarks as a stack of thumbnails, and L for a library of every video. Saved per video.",
   "author": {
     "name": "Amin Eftegarie",
@@ -15,5 +15,5 @@
     "video-overlay"
   ],
   "ghRepo": "aminozuur/iina-bookmarks-pro",
-  "ghVersion": 1
+  "ghVersion": 2
 }
