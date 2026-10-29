@@ -1,0 +1,690 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f4f5;
+      --text: #1d1d1f;
+      --muted: rgba(0, 0, 0, 0.5);
+      --card: rgba(0, 0, 0, 0.06);
+      --card-hover: rgba(0, 0, 0, 0.12);
+      --field: rgba(0, 0, 0, 0.06);
+      --accent: rgb(250, 110, 90);
+      --glass: rgba(244, 244, 245, 0.72);
+      --hairline: rgba(0, 0, 0, 0.1);
+      --track: rgba(0, 0, 0, 0.18);
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1e;
+        --text: #f2f2f2;
+        --muted: rgba(255, 255, 255, 0.5);
+        --card: rgba(255, 255, 255, 0.06);
+        --card-hover: rgba(255, 255, 255, 0.14);
+        --field: rgba(255, 255, 255, 0.08);
+        --glass: rgba(28, 28, 30, 0.68);
+        --hairline: rgba(255, 255, 255, 0.08);
+        --track: rgba(255, 255, 255, 0.25);
+      }
+    }
+    html, body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    /* A frosted bar the cards scroll under. The window has no title bar: macOS's window buttons
+       float over its top row (28px, about 78px wide), which holds only text, since that strip
+       may still drag the window. The search field sits in the row below. */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 6px 16px 8px;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      backdrop-filter: blur(24px) saturate(180%);
+      border-bottom: 1px solid var(--hairline);
+      cursor: default; /* the whole bar drags the window, see the script */
+    }
+    /* one line: title and counts, then size slider, search, Export, Import */
+    .tools {
+      position: relative;
+      height: 34px;
+      padding-left: 70px; /* clear of the window buttons */
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h1 { margin: 0; font: 600 17px var(--mono); letter-spacing: 0.04em; white-space: nowrap; }
+    #count { color: var(--muted); font: 13px var(--mono); text-transform: uppercase; white-space: nowrap; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 12px;
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      background: var(--field);
+      color: inherit;
+      font: 500 13px var(--mono);
+      text-transform: uppercase;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .pill svg { width: 13px; height: 13px; }
+    .pill:hover { border-color: var(--text); } /* black, or white in dark mode */
+    /* thumbnail size: small grid icon, slider, big grid icon */
+    .size-control { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+    .size-control svg { flex: none; }
+    #thumb-size {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 80px;
+      height: 3px;
+      margin: 0;
+      border-radius: 2px;
+      background: var(--track);
+      outline: none;
+      cursor: pointer;
+    }
+    #thumb-size::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: var(--bg);
+      border: 1px solid var(--hairline);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    /* As the window narrows, the header sheds parts so search, Export and Import always fit:
+       first the counts, then the size slider, then the buttons' words (their icons stay). */
+    @media (max-width: 1000px) { #count { display: none; } }
+    @media (max-width: 860px) { .size-control { display: none; } }
+    @media (max-width: 700px) { .pill .word { display: none; } .pill { padding: 0 9px; } }
+    /* the choice shown when Export is clicked */
+    .panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 3;
+      width: min(510px, calc(100vw - 40px));
+      box-sizing: border-box;
+      padding: 18px;
+      border: 1px solid var(--hairline);
+      border-radius: 18px;
+      background: var(--bg);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    }
+    .panel[hidden] { display: none; }
+    .panel-title { font: 600 16px var(--mono); letter-spacing: 0.04em; text-align: center; }
+    .option {
+      display: block;
+      width: 100%;
+      margin-top: 12px;
+      padding: 15px 18px;
+      border: 1.5px solid var(--hairline);
+      border-radius: 13px;
+      background: var(--field);
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .option:hover { border-color: var(--text); } /* black, or white in dark mode */
+    .option-head { display: flex; justify-content: space-between; font: 600 16px var(--mono); text-transform: uppercase; }
+    .option-head .size { color: var(--muted); font-weight: 400; }
+    .option-text { display: block; margin-top: 6px; color: var(--muted); font-size: 18px; line-height: 1.4; }
+    #status { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; white-space: nowrap; text-overflow: ellipsis; }
+    #status.error { color: var(--accent); }
+    #search {
+      display: block;
+      width: 240px;
+      height: 30px;
+      flex: 0 1 240px;
+      min-width: 120px;
+      box-sizing: border-box;
+      padding: 0 14px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      background: var(--field);
+      color: inherit;
+      font: 13px var(--mono);
+      outline: none;
+    }
+    #search:focus { border-color: var(--text); } /* black, or white in dark mode, like the buttons */
+    main { padding: 0 20px 24px; }
+    section { margin-top: 18px; }
+    .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+    .name {
+      overflow: hidden;
+      font-weight: 600;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .meta { flex: none; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; }
+    .locate {
+      flex: none;
+      margin-left: auto;
+      padding: 3px 9px;
+      border: 0;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      font: 500 11px var(--mono);
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .note { color: var(--accent); font: 11px var(--mono); text-transform: uppercase; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--thumb, 180px), 1fr)); /* set by the size slider */
+      gap: 10px;
+    }
+    .card {
+      position: relative;
+      padding: 5px;
+      border-radius: 9px;
+      background: var(--card);
+      cursor: pointer;
+    }
+    .card:hover { background: var(--card-hover); }
+    .card > :not(.remove):not(.download) { pointer-events: none; }
+    .card img, .card .blank, .card video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: 6px;
+      background: rgba(127, 127, 127, 0.2);
+    }
+    .card video {
+      position: absolute;
+      top: 5px;
+      left: 5px;
+      width: calc(100% - 10px);
+      opacity: 0;
+    }
+    .card video.playing { opacity: 1; }
+    .time, .remove, .download { z-index: 1; } /* above the clip while it plays */
+    .time {
+      position: absolute;
+      top: 9px;
+      left: 9px;
+      padding: 2px 6px;
+      border-radius: 5px;
+      background: rgba(0, 0, 0, 0.3);
+      color: #fff;
+      font: 500 11px var(--mono);
+      line-height: 16px;
+    }
+    /* the delete button: the same X, hover label and click area as in the stack (overlay.html) */
+    .remove {
+      position: absolute;
+      top: 9px;
+      right: 9px;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(250, 110, 90, 0.55);
+      color: #fff;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .remove svg { width: 8px; height: 8px; pointer-events: none; }
+    .card:hover .remove { opacity: 1; }
+    .remove:hover { background: rgb(250, 110, 90); }
+    .remove::before {
+      content: "Delete";
+      position: absolute;
+      right: calc(100% + 6px);
+      top: 50%;
+      transform: translateY(-50%);
+      display: none;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: rgb(250, 110, 90);
+      font: 500 10px var(--mono);
+      line-height: 14px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .remove:hover::before { display: block; }
+    /* 14px of invisible click area inward, up to the card's edge on the top and right */
+    .remove::after { content: ""; position: absolute; inset: -9px -9px -14px -14px; }
+    /* Download: the same ↓ and clip lengths as in the stack (overlay.html) */
+    .download {
+      position: absolute;
+      right: 9px;
+      bottom: 9px;
+      display: flex;
+      flex-direction: row-reverse;
+      gap: 4px;
+      opacity: 0;
+    }
+    .card:hover .download { opacity: 1; }
+    .download > * {
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      cursor: pointer;
+    }
+    .download > *:hover { background: #000; }
+    .download .icon { width: 20px; }
+    .download svg { width: 10px; height: 10px; pointer-events: none; }
+    .download .length { display: none; padding: 0 7px; font: 500 10px var(--mono); text-transform: uppercase; }
+    .download:hover .length { display: flex; }
+    #toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 11px;
+      border-radius: 12px;
+      background: rgba(20, 20, 20, 0.8);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      font: 500 11px var(--mono);
+      text-transform: uppercase;
+      white-space: nowrap;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(4px);
+      transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+    }
+    #toast.visible { opacity: 1; visibility: visible; transform: none; }
+    #toast.done { cursor: pointer; }
+    #toast.done:hover { background: #000; }
+    #toast.error { color: rgb(255, 150, 130); }
+    #toast > * { pointer-events: none; }
+    #toast .show { opacity: 0.6; }
+    #toast svg { width: 11px; height: 11px; flex: none; }
+    .spin { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* a video that isn't where it was last seen: shown, but it can't be opened until located */
+    .missing .card { cursor: default; }
+    .missing .card > :not(.remove) { opacity: 0.45; }
+    .missing .card:hover { background: var(--card); }
+    #empty {
+      display: none;
+      padding: 80px 20px;
+      color: var(--muted);
+      text-align: center;
+      font: 12px var(--mono);
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="tools">
+      <h1>BOOKMARKS PRO</h1>
+      <span id="count"></span>
+      <span id="status"></span>
+      <label class="size-control" title="Thumbnail size">
+        <svg width="11" height="11" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="9" y="2" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="2" y="9" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="9" y="9" width="5" height="5" rx="1.2" fill="currentColor"/></svg>
+        <input type="range" id="thumb-size" min="120" max="420" step="10" value="180">
+        <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="9" y="2" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="2" y="9" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="9" y="9" width="5" height="5" rx="1.2" fill="currentColor"/></svg>
+      </label>
+      <input id="search" placeholder="Search videos" spellcheck="false">
+      <button class="pill" id="export"><svg viewBox="0 0 16 16"><path d="M8 11V2.5M4.5 6 8 2.5 11.5 6M2.5 10.5v2.5h11v-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="word">Export</span></button>
+      <button class="pill" id="import"><svg viewBox="0 0 16 16"><path d="M8 2.5V11M4.5 7.5 8 11l3.5-3.5M2.5 10.5v2.5h11v-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="word">Import</span></button>
+      <div class="panel" id="export-panel" hidden>
+        <div class="panel-title">EXPORT BOOKMARKS</div>
+        <button class="option" data-previews="yes">
+          <span class="option-head">Full backup <span class="size" id="size-full"></span></span>
+          <span class="option-text">Everything, including the preview videos that play when you hover a thumbnail.</span>
+        </button>
+        <button class="option" data-previews="no">
+          <span class="option-head">Small backup <span class="size" id="size-small"></span></span>
+          <span class="option-text">Bookmarks and thumbnails only. The preview videos are made again when each video is opened, on a Mac with ffmpeg installed.</span>
+        </button>
+      </div>
+    </div>
+  </header>
+  <main id="list"></main>
+  <div id="empty"></div>
+  <div id="toast"></div>
+  <script>
+    const list = document.getElementById("list");
+    const search = document.getElementById("search");
+    const empty = document.getElementById("empty");
+    let videos = []; // [{ key, name, path, exists, lastOpened, bookmarks: [{ id, time, label }] }]
+    const thumbs = {}; // "<key>|<id>" -> data URI, sent per video after the list
+    const clips = {}; // same keys; fetched from main.js the first time a card is hovered
+    const notes = {}; // key -> message shown next to a video, e.g. after a failed locate
+
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+    function ago(ms) {
+      if (!ms) return "";
+      const minutes = Math.round((Date.now() - ms) / 60000);
+      if (minutes < 60) return minutes <= 1 ? "just now" : `${minutes} min ago`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return plural(hours, "hour") + " ago";
+      return plural(Math.round(hours / 24), "day") + " ago";
+    }
+
+    function blobURL(dataURI) {
+      const [head, base64] = dataURI.split(",");
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      return URL.createObjectURL(new Blob([bytes], { type: head.slice(5, head.indexOf(";")) }));
+    }
+
+    function card(video, b) {
+      const el = document.createElement("div");
+      el.className = "card";
+      const id = `${video.key}|${b.id}`;
+
+      const img = document.createElement(thumbs[id] ? "img" : "div");
+      if (thumbs[id]) img.src = thumbs[id];
+      else img.className = "blank";
+      img.dataset.thumb = id;
+
+      const time = Object.assign(document.createElement("div"), { className: "time", textContent: b.label });
+      const remove = document.createElement("div");
+      remove.className = "remove";
+      remove.innerHTML =
+        '<svg viewBox="0 0 8 8"><path d="M1 1l6 6M7 1L1 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+      remove.onclick = (e) => {
+        e.stopPropagation();
+        playTrashSound();
+        iina.postMessage("remove", { key: video.key, id: b.id });
+        video.bookmarks = video.bookmarks.filter((x) => x.id !== b.id);
+        if (!video.bookmarks.length) videos = videos.filter((v) => v !== video);
+        render();
+      };
+      el.append(img, time, remove);
+      if (video.canDownload && video.exists) el.append(downloadButton(video, b));
+      if (!video.exists) return el;
+
+      el.onclick = () => iina.postMessage("open", { key: video.key, time: b.time });
+
+      // hover: play the clip, fetching it the first time
+      const player = Object.assign(document.createElement("video"), { muted: true, loop: true, playsInline: true });
+      player.addEventListener("playing", () => player.classList.add("playing"));
+      el.append(player);
+      let hovering = false;
+      const play = () => {
+        if (!hovering || !clips[id]) return;
+        if (!player.src) player.src = blobURL(clips[id]);
+        player.currentTime = 0;
+        player.play().catch(() => {});
+      };
+      el.addEventListener("mouseenter", () => {
+        hovering = true;
+        if (clips[id]) play();
+        else if (clips[id] !== null) iina.postMessage("clip", { key: video.key, id: b.id });
+      });
+      el.addEventListener("mouseleave", () => {
+        hovering = false;
+        player.pause();
+        player.classList.remove("playing");
+      });
+      el.playClip = play;
+      return el;
+    }
+
+    function render() {
+      const query = search.value.trim().toLowerCase();
+      const shown = videos.filter((v) => !query || (v.name || "").toLowerCase().includes(query));
+      const total = videos.reduce((n, v) => n + v.bookmarks.length, 0);
+      document.getElementById("count").textContent = `${plural(total, "bookmark")} ${plural(videos.length, "video")}`;
+
+      list.replaceChildren(...shown.map((v) => {
+        const section = document.createElement("section");
+        section.dataset.key = v.key;
+        if (!v.exists) section.className = "missing";
+
+        const head = document.createElement("div");
+        head.className = "head";
+        const name = Object.assign(document.createElement("div"), {
+          className: "name",
+          textContent: v.name || "Unknown video",
+          title: v.path || "Not opened since the library was added: open it once, or locate it",
+        });
+        const meta = Object.assign(document.createElement("div"), {
+          className: "meta",
+          textContent: [plural(v.bookmarks.length, "bookmark"), v.exists ? ago(v.lastOpened) : "file not found"]
+            .filter(Boolean).join(" · "),
+        });
+        head.append(name, meta);
+        if (notes[v.key]) head.append(Object.assign(document.createElement("span"), { className: "note", textContent: notes[v.key] }));
+        if (!v.exists) {
+          const locate = Object.assign(document.createElement("button"), { className: "locate", textContent: "Locate…" });
+          locate.onclick = () => iina.postMessage("locate", { key: v.key });
+          head.append(locate);
+        }
+
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        grid.append(...v.bookmarks.map((b) => card(v, b)));
+        section.append(head, grid);
+        return section;
+      }));
+
+      empty.style.display = shown.length ? "none" : "block";
+      empty.textContent = videos.length ? "No videos match" : "No bookmarks yet · press B while watching";
+    }
+
+    // ---- Download: ↓ on a card, then 5S / 10S / 30S. main.js saves the clip to Downloads and
+    // reports back; the note in the corner follows it, and once it's saved, clicking the note
+    // shows the file in Finder. (The same as in overlay.html.)
+    const ARROW = '<svg viewBox="0 0 10 10"><path d="M5 1.5v6M2.2 4.8 5 7.6l2.8-2.8M1.5 9h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const CHECK = '<svg viewBox="0 0 11 11"><path d="M2 5.8 4.5 8.2 9 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const SPINNER = '<svg class="spin" viewBox="0 0 11 11"><circle cx="5.5" cy="5.5" r="4.2" fill="none" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5"/><path d="M5.5 1.3a4.2 4.2 0 0 1 4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+    function downloadButton(video, b) {
+      const wrap = document.createElement("div");
+      wrap.className = "download";
+      wrap.onclick = (e) => e.stopPropagation(); // a near miss between the buttons doesn't open the video
+      wrap.append(Object.assign(document.createElement("div"), { className: "icon", innerHTML: ARROW }));
+      for (const seconds of [30, 10, 5]) { // row-reverse: shown 5S 10S 30S ↓, left to right
+        const length = Object.assign(document.createElement("div"), { className: "length", textContent: `${seconds}s` });
+        length.onclick = (e) => {
+          e.stopPropagation();
+          iina.postMessage("download", { key: video.key, id: b.id, seconds });
+        };
+        wrap.append(length);
+      }
+      return wrap;
+    }
+
+    const toast = document.getElementById("toast");
+    const saving = new Set(); // jobs still being saved
+    let toastTimer;
+    let savedPath = null;
+    toast.onclick = () => savedPath && iina.postMessage("reveal", { path: savedPath });
+
+    function showToast(state, text) {
+      toast.className = `visible ${state}`;
+      toast.innerHTML = state === "saving" ? SPINNER : state === "done" ? CHECK : "";
+      toast.append(Object.assign(document.createElement("span"), { textContent: text }));
+      if (state === "done") toast.append(Object.assign(document.createElement("span"), { className: "show", textContent: "· Show" }));
+    }
+
+    iina.onMessage("download", ({ job, state, text, path }) => {
+      clearTimeout(toastTimer);
+      if (state === "saving") saving.add(job);
+      else saving.delete(job);
+      savedPath = state === "done" ? path : null;
+      showToast(state, saving.size > 1 && state === "saving" ? `Saving ${saving.size} clips` : text);
+      if (state === "saving") return;
+      toastTimer = setTimeout(() => {
+        if (saving.size) return showToast("saving", saving.size > 1 ? `Saving ${saving.size} clips` : "Saving clip");
+        toast.classList.remove("visible");
+        savedPath = null;
+      }, state === "done" ? 4000 : 3000);
+    });
+
+    iina.onMessage("videos", (data) => {
+      videos = data;
+      render();
+    });
+    // thumbnails come per video, so the window fills in quickly without one huge message
+    iina.onMessage("thumbs", ({ key, thumbs: byId }) => {
+      for (const [id, src] of Object.entries(byId)) {
+        thumbs[`${key}|${id}`] = src;
+        const blank = document.querySelector(`[data-thumb="${CSS.escape(`${key}|${id}`)}"]`);
+        if (blank && src) {
+          const img = Object.assign(document.createElement("img"), { src });
+          img.dataset.thumb = blank.dataset.thumb;
+          blank.replaceWith(img);
+        }
+      }
+    });
+    iina.onMessage("clip", ({ key, id, clip }) => {
+      clips[`${key}|${id}`] = clip; // null: this bookmark has no clip, don't ask again
+      document.querySelectorAll(`section[data-key="${CSS.escape(key)}"] .card`).forEach((el) => el.playClip?.());
+    });
+    iina.onMessage("note", ({ key, text }) => {
+      notes[key] = text;
+      render();
+    });
+
+    // Finder's Cmd+Delete sound, sent once by main.js. Web Audio keeps it decoded and the audio
+    // output open (opened by the first mouse-down, which the browser requires), so it starts the
+    // moment the X is clicked; an <audio> element reconnects to the output on every play, which
+    // is audibly late. If the page can't play it, main.js plays it with afplay instead.
+    let audio = null;
+    let trashBuffer = null;
+    let trashVolume = 1;
+    iina.onMessage("sound", ({ src, volume }) => {
+      trashVolume = volume;
+      try {
+        audio = audio || new AudioContext();
+        const bytes = Uint8Array.from(atob(src.split(",")[1]), (c) => c.charCodeAt(0));
+        audio.decodeAudioData(bytes.buffer).then((buffer) => (trashBuffer = buffer), () => (trashBuffer = null));
+      } catch (e) {
+        audio = null;
+      }
+    });
+    addEventListener("mousedown", () => audio?.state === "suspended" && audio.resume(), true);
+    function playTrashSound() {
+      try {
+        if (!audio || !trashBuffer) throw new Error("not ready");
+        if (audio.state !== "running") audio.resume();
+        const source = audio.createBufferSource();
+        const gain = audio.createGain();
+        gain.gain.value = trashVolume;
+        source.buffer = trashBuffer;
+        source.connect(gain).connect(audio.destination);
+        source.start();
+      } catch (e) {
+        iina.postMessage("play-trash-sound"); // afplay: later, but never silent
+      }
+    }
+
+    search.addEventListener("input", render);
+
+    // Thumbnail size: the slider sets the grid's minimum card width; main.js remembers it.
+    const sizeSlider = document.getElementById("thumb-size");
+    const applySize = (px) => document.documentElement.style.setProperty("--thumb", `${px}px`);
+    sizeSlider.addEventListener("input", () => applySize(sizeSlider.value));
+    sizeSlider.addEventListener("change", () => iina.postMessage("thumb-size", { px: Number(sizeSlider.value) }));
+    iina.onMessage("prefs", ({ thumbSize }) => {
+      if (!thumbSize) return;
+      sizeSlider.value = thumbSize;
+      applySize(thumbSize);
+    });
+
+    // Export / Import: main.js shows the file picker and does the work, then reports back here.
+    const status = document.getElementById("status");
+    const panel = document.getElementById("export-panel");
+    const mb = (bytes) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
+    document.getElementById("export").onclick = () => {
+      panel.hidden = !panel.hidden;
+      if (panel.hidden) return;
+      document.getElementById("size-full").textContent = document.getElementById("size-small").textContent = "…";
+      iina.postMessage("export-sizes");
+    };
+    iina.onMessage("export-sizes", ({ full, small }) => {
+      document.getElementById("size-full").textContent = `~${mb(full)}`;
+      document.getElementById("size-small").textContent = `~${mb(small)}`;
+    });
+    panel.querySelectorAll(".option").forEach((option) => {
+      option.onclick = () => {
+        panel.hidden = true;
+        status.textContent = "";
+        iina.postMessage("export", { withClips: option.dataset.previews === "yes" });
+      };
+    });
+    // a click anywhere else closes the choice
+    addEventListener("mousedown", (e) => {
+      if (!panel.hidden && !e.target.closest("#export-panel, #export")) panel.hidden = true;
+    });
+    document.getElementById("import").onclick = () => {
+      status.textContent = "";
+      iina.postMessage("import");
+    };
+    iina.onMessage("status", ({ text, error }) => {
+      status.textContent = "· " + text;
+      status.title = text;
+      status.classList.toggle("error", !!error);
+    });
+
+    // Dragging the window. This page takes every mouse event, so macOS can't move the window by
+    // its top edge; the header does it instead. WebKit counts screen positions from the top of
+    // the main screen; main.js turns them into macOS's window position (standaloneWindow.setFrame).
+    // window.screenX/Y and outerHeight can't be trusted here (IINA doesn't tell WebKit where its
+    // window is, so they come out as 0), so the window's corner comes from the mouse event: its
+    // screen position minus its position in the page. The page fills the window, so its height
+    // is the window's.
+    document.querySelector("header").addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || e.target.closest("input, button, label, .panel")) return;
+      e.preventDefault(); // no text selection
+      const start = { mouseX: e.screenX, mouseY: e.screenY, left: e.screenX - e.clientX, top: e.screenY - e.clientY };
+      let next = null;
+      const move = (ev) => {
+        const queued = next;
+        next = {
+          left: start.left + ev.screenX - start.mouseX,
+          top: start.top + ev.screenY - start.mouseY,
+          height: window.innerHeight,
+        };
+        // at most one move per frame, always to the latest mouse position
+        if (!queued) requestAnimationFrame(() => {
+          iina.postMessage("move-window", next);
+          next = null;
+        });
+      };
+      const up = () => {
+        removeEventListener("mousemove", move);
+        removeEventListener("mouseup", up);
+      };
+      addEventListener("mousemove", move);
+      addEventListener("mouseup", up);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        if (!document.getElementById("export-panel").hidden) {
+          document.getElementById("export-panel").hidden = true;
+        } else if (search.value) {
+          search.value = "";
+          render();
+        } else {
+          iina.postMessage("close");
+        }
+      }
+    });
+    iina.postMessage("ready");
+  </script>
+</body>
+</html>

@@ -1,0 +1,755 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    #strip {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      bottom: 96px; /* sits above IINA's on-screen controller */
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-radius: 10px;
+      background: rgba(20, 20, 20, 0.18); /* same light frame as the stack cards */
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 10px rgba(0, 0, 0, 0.35); /* soft, readable on bright video */
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      opacity: 0;
+      transition: opacity 0.4s;
+      pointer-events: none;
+    }
+    #strip.visible { opacity: 1; }
+    #label {
+      white-space: nowrap;
+      font: 500 11px ui-monospace, "SF Mono", Menlo, monospace; /* like the other hints */
+      text-transform: uppercase;
+    }
+    #track {
+      position: relative;
+      flex: 1;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.25);
+    }
+    .mark {
+      position: absolute;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      margin: -4px 0 0 -4px;
+      border-radius: 50%;
+      background: #ffcc00;
+      box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45);
+    }
+    .mark.new { animation: pop 0.6s ease-out; }
+    @keyframes pop { from { transform: scale(2.2); } to { transform: scale(1); } }
+    #card {
+      position: absolute;
+      top: 48px; /* below IINA's title bar, where the stack opens too */
+      left: 16px;
+      width: 15%; /* same width as the stack */
+      padding: 6px;
+      border-radius: 10px;
+      background: rgba(20, 20, 20, 0.45); /* darker than the stack, so its text stands out */
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 10px rgba(0, 0, 0, 0.18); /* lighter: the card itself is darker */
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      opacity: 0;
+      transform: translateX(-12px);
+      transition: opacity 0.3s, transform 0.3s;
+      pointer-events: none; /* never block clicks on the stack, even when they overlap */
+    }
+    #card.visible { opacity: 1; transform: none; }
+    #card img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.15);
+    }
+    #card img:not([src]) { visibility: hidden; }
+    #card-label, #card-hint {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      text-align: center;
+      text-transform: uppercase;
+    }
+    #card-label { padding: 6px 2px 1px; font-weight: 500; }
+    /* Emoji fill their whole font box, unlike capital letters, and the solid green square
+       casts a heavier shadow than thin strokes do. Shrink it to cap height, without shadow. */
+    #card-label::before {
+      content: "✅";
+      margin-right: 6px;
+      font-family: -apple-system, sans-serif;
+      font-size: 0.8em;
+      vertical-align: 0.05em;
+      text-shadow: none;
+    }
+    #card-hint { padding: 2px 2px 1px; font-size: 11px; opacity: 0.75; }
+    /* a keycap, so the shortcut reads as a key to press */
+    #card-hint kbd, #nav kbd, #library-btn kbd {
+      display: inline-block;
+      padding: 0 4px;
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      border-radius: 4px;
+      font: inherit;
+      line-height: 14px;
+    }
+    /* Invisible layer behind the stack while it's open from the keyboard: a click anywhere
+       outside the cards lands here and closes the stack, instead of reaching the video. */
+    #backdrop { position: absolute; inset: 0; display: none; }
+    #backdrop.on { display: block; }
+    #stack-wrap {
+      position: absolute;
+      top: 48px; /* below IINA's title bar */
+      left: 16px;
+      width: 15%; /* of the video area, so the stack scales with the window */
+      /* hidden elements are skipped by IINA's hit test, so a closed stack never takes clicks */
+      visibility: hidden;
+      opacity: 0;
+      transition: opacity 0.3s, visibility 0.3s;
+    }
+    #stack-wrap.open { visibility: visible; opacity: 1; }
+    #stack {
+      max-height: calc(100vh - 180px); /* stays clear of the strip and controller */
+      /* Not user-scrollable, so Space and arrow keys aren't swallowed here and reach IINA.
+         The mouse wheel scrolls it from script instead. */
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    /* shown while more cards are hidden below; clicking it scrolls down */
+    /* below the stack, either side of the scroll arrow: which keys step through bookmarks */
+    #stack-wrap { container-type: inline-size; }
+    #nav {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      height: 28px;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #fff;
+      font: 500 11px ui-monospace, "SF Mono", Menlo, monospace; /* like the card hint */
+      text-transform: uppercase;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 10px rgba(0, 0, 0, 0.35);
+      pointer-events: none; /* only the two buttons take clicks; between them closes the stack */
+    }
+    /* full-width button below Previous / Next: opens the library window */
+    #library-btn {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      height: 32px;
+      margin-top: 44px; /* below the 28px Previous / Next row and its 8px gap */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: #fff;
+      font: 500 11px ui-monospace, "SF Mono", Menlo, monospace;
+      text-transform: uppercase;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 10px rgba(0, 0, 0, 0.35);
+    }
+    #library-btn > * { pointer-events: none; }
+    /* the Previous / Next buttons, the scroll arrow and the library button share one look */
+    #library-btn, #nav > span, #more {
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.18);
+      cursor: pointer;
+    }
+    #library-btn:hover, #nav > span:hover, #more:hover { background: rgba(255, 255, 255, 0.3); }
+    #nav > span {
+      padding: 3px 5px;
+      pointer-events: auto;
+    }
+    #nav > span > * { pointer-events: none; } /* IINA's hit test should see the button itself */
+    #nav kbd { margin-right: 5px; }
+    /* in a narrow stack, keep just the keycaps so nothing collides with the arrow */
+    @container (max-width: 220px) { #nav .word { display: none; } #nav kbd { margin: 0; } }
+    /* sits between Previous and Next; the row spaces all three evenly */
+    #more {
+      width: 28px;
+      height: 22px; /* as tall as the Previous / Next buttons */
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      visibility: hidden;
+      opacity: 0;
+      transition: opacity 0.2s, visibility 0.2s;
+    }
+    #more.show { visibility: inherit; opacity: 1; animation: bob 1.6s ease-in-out infinite; }
+    #more svg { width: 12px; height: 12px; pointer-events: none; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6)); }
+    @keyframes bob { 50% { transform: translateY(3px); } }
+    .item {
+      position: relative;
+      flex: none;
+      padding: 6px;
+      border-radius: 10px;
+      background: rgba(20, 20, 20, 0.18); /* mostly blur, with a light dark tint */
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      cursor: pointer;
+      animation: drop 0.25s ease-out both;
+    }
+    .item:hover { background: rgba(255, 255, 255, 0.2); }
+    /* children ignore the pointer so IINA's hit test sees the clickable item itself */
+    .item > :not(.remove):not(.download) { pointer-events: none; }
+    .item img, .item .blank {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.15);
+    }
+    /* sits on the thumbnail's upper-left corner, mirroring the ✕ on the right */
+    /* the hover-preview clip, laid over the thumbnail once it's actually playing */
+    .item video {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      width: calc(100% - 12px);
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: 6px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .item video.playing { opacity: 1; }
+    .item .time {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 2px 6px;
+      border-radius: 5px;
+      background: rgba(0, 0, 0, 0.3);
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 16px;
+    }
+    .remove {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(250, 110, 90, 0.55);
+      color: #fff;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .remove svg { width: 8px; height: 8px; pointer-events: none; } /* clicks land on .remove itself */
+    .item:hover .remove { opacity: 1; }
+    .remove:hover { background: rgb(250, 110, 90); }
+    /* label shown instantly to the left of the X while it's hovered (replaces a slow tooltip) */
+    .remove::before {
+      content: "Delete";
+      position: absolute;
+      right: calc(100% + 6px);
+      top: 50%;
+      transform: translateY(-50%);
+      display: none;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: rgb(250, 110, 90); /* solid, like the hovered X */
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 10px;
+      font-weight: 500;
+      line-height: 14px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      pointer-events: none; /* it labels the X; it isn't part of the click area */
+    }
+    .remove:hover::before { display: block; }
+    /* An invisible 14px margin around the circle also counts as the button, so hovering and
+       clicking near the X is enough. Toward the card's edges it stops at the edge (the circle
+       sits 10px in), so it never reaches over the card above or the video. */
+    .remove::after { content: ""; position: absolute; inset: -10px -10px -14px -14px; }
+    /* Download: a small ↓ on the thumbnail's lower-right corner. Hovering it reveals the clip
+       lengths to its left; the whole row is one hover area, so the mouse can move across. */
+    .download {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      display: flex;
+      flex-direction: row-reverse;
+      gap: 4px;
+      opacity: 0;
+    }
+    .item:hover .download { opacity: 1; }
+    .download > * {
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      cursor: pointer;
+    }
+    .download > *:hover { background: #000; }
+    .download .icon { width: 20px; }
+    .download svg { width: 10px; height: 10px; pointer-events: none; }
+    .download .length {
+      display: none;
+      padding: 0 7px;
+      font: 500 10px ui-monospace, "SF Mono", Menlo, monospace;
+      text-transform: uppercase;
+    }
+    .download:hover .length { display: flex; }
+    /* the small note in the upper-right corner while a clip is saved, and once it's done */
+    #toast {
+      position: absolute;
+      top: 44px;
+      right: 16px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 11px;
+      border-radius: 12px;
+      background: rgba(20, 20, 20, 0.45);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      font: 500 11px ui-monospace, "SF Mono", Menlo, monospace;
+      text-transform: uppercase;
+      white-space: nowrap;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-4px);
+      transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
+    }
+    #toast.visible { opacity: 1; visibility: visible; transform: none; }
+    #toast.done { cursor: pointer; }
+    #toast.done:hover { background: #000; }
+    #toast.error { color: rgb(255, 150, 130); }
+    #toast > * { pointer-events: none; }
+    #toast .show { opacity: 0.6; }
+    #toast svg { width: 11px; height: 11px; flex: none; }
+    .spin { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes drop { from { opacity: 0; transform: translateY(-8px); } }
+    #head {
+      position: absolute;
+      top: -3px;
+      width: 2px;
+      height: 10px;
+      margin-left: -1px;
+      border-radius: 1px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div id="backdrop" data-clickable></div>
+  <div id="stack-wrap">
+    <div id="stack" data-clickable></div>
+    <div id="nav">
+      <span id="nav-prev" data-clickable></span>
+      <div id="more" data-clickable>
+        <svg viewBox="0 0 12 12"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <span id="nav-next" data-clickable></span>
+    </div>
+    <div id="library-btn" data-clickable></div>
+  </div>
+  <div id="card">
+    <img id="card-thumb" alt="">
+    <div id="card-label"></div>
+    <div id="card-hint"></div>
+  </div>
+  <div id="toast"></div>
+  <div id="strip">
+    <span id="label"></span>
+    <div id="track"><div id="head"></div></div>
+  </div>
+  <script>
+    const strip = document.getElementById("strip");
+    const track = document.getElementById("track");
+    const head = document.getElementById("head");
+    const label = document.getElementById("label");
+    let hideTimer;
+
+    const percent = (t, duration) => `${Math.min(100, Math.max(0, (t / duration) * 100))}%`;
+
+    // Once the strip, card and stack have all faded out, tell main.js so it can hide the overlay
+    // (a visible overlay takes over the mouse cursor, which breaks other plugins' pointers).
+    let idleTimer;
+    function reportIdleSoon() {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        const busy = strip.classList.contains("visible") || card.classList.contains("visible")
+          || stackWrap.classList.contains("open") || toast.classList.contains("visible");
+        if (!busy) iina.postMessage("idle");
+      }, 500); // the fades take at most 0.4s
+    }
+
+    // data: { times, duration, position, label, highlight }
+    function show(data) {
+      label.textContent = data.label;
+      track.querySelectorAll(".mark").forEach((m) => m.remove());
+      for (const t of data.times) {
+        const mark = document.createElement("div");
+        mark.className = t === data.highlight ? "mark new" : "mark";
+        mark.style.left = percent(t, data.duration);
+        track.append(mark);
+      }
+      head.style.left = percent(data.position, data.duration);
+
+      strip.classList.add("visible");
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        strip.classList.remove("visible");
+        reportIdleSoon();
+      }, 1500);
+    }
+
+    // data: { thumb, label, keys } — confirms which frame was just bookmarked.
+    const card = document.getElementById("card");
+    const cardThumb = document.getElementById("card-thumb");
+    const cardLabel = document.getElementById("card-label");
+    const cardHint = document.getElementById("card-hint");
+    let cardTimer;
+
+    function added(data) {
+      if (data.thumb) cardThumb.src = data.thumb;
+      else cardThumb.removeAttribute("src");
+      cardLabel.textContent = data.label;
+      const caps = data.keys.map((k) => Object.assign(document.createElement("kbd"), { textContent: k }));
+      cardHint.replaceChildren("Press ", ...caps.flatMap((cap, i) => (i ? [" + ", cap] : [cap])), " to see bookmarks");
+
+      card.classList.add("visible");
+      clearTimeout(cardTimer);
+      cardTimer = setTimeout(() => {
+        card.classList.remove("visible");
+        reportIdleSoon();
+      }, 3500); // time to read the hint
+    }
+
+    // data: { open, items: [{ id, time, label, thumb }] } — the Shift+B stack.
+    const stackWrap = document.getElementById("stack-wrap");
+    const stack = document.getElementById("stack");
+    const more = document.getElementById("more");
+    let stackIds = [];
+
+    function updateMore() {
+      more.classList.toggle("show", stack.scrollTop + stack.clientHeight < stack.scrollHeight - 1);
+    }
+    more.onclick = () => stack.scrollBy({ top: stack.clientHeight * 0.8, behavior: "smooth" });
+    stack.addEventListener("scroll", updateMore);
+    window.addEventListener("resize", updateMore);
+
+    // In peek mode (a video with bookmarks just opened) the stack closes itself after a few
+    // seconds, unless the mouse is over it.
+    const PEEK_MS = 1500;
+    const LEAVE_MS = 1500;
+    let peeking = false;
+    let hovering = false;
+    let peekTimer;
+
+    function closeStack() {
+      renderStack({ open: false });
+      iina.postMessage("stack-closed");
+    }
+
+    function closePeekIn(ms) {
+      clearTimeout(peekTimer);
+      peekTimer = setTimeout(closeStack, ms);
+    }
+
+    // Not in peek mode: a stack that opened on its own shouldn't eat the first click on the video.
+    const backdrop = document.getElementById("backdrop");
+    backdrop.onclick = closeStack;
+
+    // A right-click here would otherwise open the web page's own menu ("Reload"). Outside the
+    // cards it does what it does on the video in IINA by default: play / pause.
+    document.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      if (!e.target.closest(".item")) iina.postMessage("toggle-pause");
+    });
+    stack.addEventListener("click", (e) => e.target === stack && !peeking && closeStack()); // gaps between cards
+
+    stackWrap.addEventListener("mouseenter", () => {
+      hovering = true;
+      clearTimeout(peekTimer);
+    });
+    stackWrap.addEventListener("mouseleave", () => {
+      hovering = false;
+      if (peeking) closePeekIn(LEAVE_MS);
+    });
+
+    // Hovering a card plays its clip: the 5 seconds after the bookmark, silent and looping.
+    // Clips arrive as data URIs; a Blob URL is the dependable way to hand one to <video>.
+    let clipURLs = [];
+
+    function blobURL(dataURI) {
+      const [head, base64] = dataURI.split(",");
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: head.slice(5, head.indexOf(";")) }));
+      clipURLs.push(url);
+      return url;
+    }
+
+    function clipPlayer(item, clip) {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.addEventListener("playing", () => video.classList.add("playing"));
+      item.addEventListener("mouseenter", () => {
+        if (!video.src) video.src = blobURL(clip); // decoded only once someone hovers
+        video.currentTime = 0;
+        video.play().catch(() => {});
+      });
+      item.addEventListener("mouseleave", () => {
+        video.pause();
+        video.classList.remove("playing");
+      });
+      return video;
+    }
+
+    // data: { open, peek, items: [{ id, time, label, thumb?, clip? }] }. Each thumbnail and clip
+    // arrives once; `media` keeps them. Cards are rebuilt only when the bookmarks change, even
+    // while the stack is hidden, so opening it just shows what's already built.
+    const media = {};
+    let builtKey = "";
+
+    // data.keys: { prev: ["J"], next: ["K"] }, from PREV_KEY / NEXT_KEY in main.js
+    document.getElementById("nav-prev").onclick = () => iina.postMessage("jump", { direction: -1 });
+    document.getElementById("nav-next").onclick = () => iina.postMessage("jump", { direction: 1 });
+    document.getElementById("library-btn").onclick = () => {
+      closeStack();
+      iina.postMessage("show-library");
+    };
+
+    function renderNav(keys) {
+      const hint = (el, parts, word) => {
+        const caps = parts.map((k) => Object.assign(document.createElement("kbd"), { textContent: k }));
+        const label = Object.assign(document.createElement("span"), { className: "word", textContent: word });
+        el.replaceChildren(...caps, label);
+      };
+      hint(document.getElementById("nav-prev"), keys.prev, "Previous");
+      hint(document.getElementById("nav-next"), keys.next, "Next");
+      hint(document.getElementById("library-btn"), keys.library, "Show library");
+    }
+
+    function renderStack(data) {
+      if (data.keys) renderNav(data.keys);
+      if ("canDownload" in data && data.canDownload !== canDownload) {
+        canDownload = data.canDownload;
+        builtKey = ""; // rebuild the cards with or without the ↓
+      }
+      if (data.items) { // closing from the page itself sends no items
+        for (const b of data.items) {
+          const m = (media[b.id] = media[b.id] || {});
+          if (b.thumb) m.thumb = b.thumb;
+          if (b.clip) m.clip = b.clip;
+        }
+        const key = data.items.map((b) => `${b.id}:${b.label}:${!!media[b.id].thumb}:${!!media[b.id].clip}`).join();
+        if (key !== builtKey) buildCards(data.items, stackWrap.classList.contains("open"));
+        builtKey = key;
+      }
+
+      const opening = data.open && !stackWrap.classList.contains("open");
+      stackWrap.classList.toggle("open", data.open);
+      peeking = data.open && !!data.peek;
+      backdrop.classList.toggle("on", data.open && !peeking);
+      clearTimeout(peekTimer);
+      if (peeking && !hovering) closePeekIn(PEEK_MS);
+      if (opening) dropIn([...stack.children]);
+      updateMore();
+      if (!data.open) reportIdleSoon();
+    }
+
+    // Replay the cards' drop-in animation, one after another.
+    function dropIn(cards) {
+      cards.forEach((card, i) => {
+        card.style.animation = "none";
+        void card.offsetWidth; // restart the animation
+        card.style.animation = "";
+        card.style.animationDelay = `${i * 30}ms`;
+      });
+    }
+
+    function buildCards(items, visible) {
+      const known = new Set(stackIds);
+      clipURLs.forEach((url) => URL.revokeObjectURL(url));
+      clipURLs = [];
+      stack.replaceChildren();
+      items.forEach((b) => {
+        const { thumb: thumbSrc, clip } = media[b.id];
+        const item = document.createElement("div");
+        item.className = "item";
+        item.dataset.clickable = "";
+        item.style.animation = "none"; // dropIn() animates them when the stack opens
+        item.onclick = () => {
+          iina.postMessage("seek", { time: b.time });
+          closeStack(); // you've picked one, so get out of the way
+        };
+
+        const thumb = document.createElement(thumbSrc ? "img" : "div");
+        if (thumbSrc) {
+          thumb.onload = updateMore; // card heights are only known once images load
+          thumb.src = thumbSrc;
+        } else {
+          thumb.className = "blank";
+        }
+
+        const time = document.createElement("div");
+        time.className = "time";
+        time.textContent = b.label;
+
+        const remove = document.createElement("div"); // a div, so it never takes keyboard focus
+        remove.className = "remove";
+        remove.dataset.clickable = "";
+        // an SVG cross centers exactly, unlike the ✕ glyph, whose position depends on the font
+        remove.innerHTML =
+          '<svg viewBox="0 0 8 8"><path d="M1 1l6 6M7 1L1 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+        remove.onclick = (e) => {
+          e.stopPropagation();
+          playTrashSound();
+          iina.postMessage("remove", { id: b.id });
+        };
+
+        item.append(thumb);
+        if (clip) item.append(clipPlayer(item, clip));
+        item.append(time, remove);
+        if (canDownload) item.append(downloadButton(b));
+        stack.append(item);
+      });
+      // a bookmark added while the stack is showing drops in; the rest stay put
+      if (visible) dropIn([...stack.children].filter((_, i) => !known.has(items[i].id)));
+      stackIds = items.map((b) => b.id);
+    }
+
+    stackWrap.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      stack.scrollTop += e.deltaY;
+    }, { passive: false });
+
+    // Finder's Cmd+Delete sound, sent once by main.js. Web Audio keeps it decoded and the audio
+    // output open (opened by the first mouse-down, which the browser requires), so it starts the
+    // moment the X is clicked; an <audio> element reconnects to the output on every play, which
+    // is audibly late. If the page can't play it, main.js plays it with afplay instead.
+    let audio = null;
+    let trashBuffer = null;
+    let trashVolume = 1;
+    iina.onMessage("sound", ({ src, volume }) => {
+      trashVolume = volume;
+      try {
+        audio = audio || new AudioContext();
+        const bytes = Uint8Array.from(atob(src.split(",")[1]), (c) => c.charCodeAt(0));
+        audio.decodeAudioData(bytes.buffer).then((buffer) => (trashBuffer = buffer), () => (trashBuffer = null));
+      } catch (e) {
+        audio = null;
+      }
+    });
+    addEventListener("mousedown", () => audio?.state === "suspended" && audio.resume(), true);
+    function playTrashSound() {
+      try {
+        if (!audio || !trashBuffer) throw new Error("not ready");
+        if (audio.state !== "running") audio.resume();
+        const source = audio.createBufferSource();
+        const gain = audio.createGain();
+        gain.gain.value = trashVolume;
+        source.buffer = trashBuffer;
+        source.connect(gain).connect(audio.destination);
+        source.start();
+      } catch (e) {
+        iina.postMessage("play-trash-sound"); // afplay: later, but never silent
+      }
+    }
+
+    // ---- Download: ↓ on a card, then 5S / 10S / 30S. main.js saves the clip to Downloads and
+    // reports back; the note in the corner follows it, and once it's saved, clicking the note
+    // shows the file in Finder.
+    let canDownload = false; // ffmpeg is installed and the video is a local file
+    const ARROW = '<svg viewBox="0 0 10 10"><path d="M5 1.5v6M2.2 4.8 5 7.6l2.8-2.8M1.5 9h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const CHECK = '<svg viewBox="0 0 11 11"><path d="M2 5.8 4.5 8.2 9 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const SPINNER = '<svg class="spin" viewBox="0 0 11 11"><circle cx="5.5" cy="5.5" r="4.2" fill="none" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5"/><path d="M5.5 1.3a4.2 4.2 0 0 1 4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+    function downloadButton(b) {
+      const wrap = document.createElement("div");
+      wrap.className = "download";
+      wrap.dataset.clickable = ""; // the gaps between the buttons, so a near miss doesn't seek
+      wrap.onclick = (e) => e.stopPropagation();
+      const icon = Object.assign(document.createElement("div"), { className: "icon", innerHTML: ARROW });
+      icon.dataset.clickable = "";
+      wrap.append(icon);
+      for (const seconds of [30, 10, 5]) { // row-reverse: shown 5S 10S 30S ↓, left to right
+        const length = Object.assign(document.createElement("div"), { className: "length", textContent: `${seconds}s` });
+        length.dataset.clickable = "";
+        length.onclick = (e) => {
+          e.stopPropagation();
+          iina.postMessage("download", { id: b.id, seconds });
+        };
+        wrap.append(length);
+      }
+      return wrap;
+    }
+
+    const toast = document.getElementById("toast");
+    const saving = new Set(); // jobs still being saved
+    let toastTimer;
+    let savedPath = null;
+    toast.onclick = () => savedPath && iina.postMessage("reveal", { path: savedPath });
+
+    function showToast(state, text) {
+      toast.className = `visible ${state}`;
+      if (state === "done") toast.dataset.clickable = "";
+      else delete toast.dataset.clickable;
+      const icon = state === "saving" ? SPINNER : state === "done" ? CHECK : "";
+      toast.innerHTML = icon;
+      toast.append(Object.assign(document.createElement("span"), { textContent: text }));
+      if (state === "done") toast.append(Object.assign(document.createElement("span"), { className: "show", textContent: "· Show" }));
+    }
+
+    iina.onMessage("download", ({ job, state, text, path }) => {
+      clearTimeout(toastTimer);
+      if (state === "saving") saving.add(job);
+      else saving.delete(job);
+      savedPath = state === "done" ? path : null;
+      showToast(state, saving.size > 1 && state === "saving" ? `Saving ${saving.size} clips` : text);
+      if (state === "saving") return;
+      toastTimer = setTimeout(() => {
+        if (saving.size) return showToast("saving", saving.size > 1 ? `Saving ${saving.size} clips` : "Saving clip");
+        toast.classList.remove("visible");
+        delete toast.dataset.clickable;
+        savedPath = null;
+        reportIdleSoon();
+      }, state === "done" ? 4000 : 3000);
+    });
+
+    iina.onMessage("show", show);
+    iina.onMessage("added", added);
+    iina.onMessage("stack", renderStack);
+  </script>
+</body>
+</html>

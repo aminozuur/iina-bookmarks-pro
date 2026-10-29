@@ -1,0 +1,39 @@
+name: Release Bookmarks Pro
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build plugin package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          zip -r "dist/Bookmarks-Pro-${VERSION}.iinaplgz" \
+            Info.json \
+            main.js \
+            overlay.html \
+            library.html \
+            README.md \
+            LICENSE
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # notes from .github/release-notes/<tag>.md when there is one, else from the commits
+          NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then NOTES_ARGS=(--notes-file "$NOTES"); else NOTES_ARGS=(--generate-notes); fi
+          gh release create "$GITHUB_REF_NAME" \
+          "dist/Bookmarks-Pro-${GITHUB_REF_NAME#v}.iinaplgz" \
+          "${NOTES_ARGS[@]}" \
+          --title "Bookmarks Pro ${GITHUB_REF_NAME#v}"
