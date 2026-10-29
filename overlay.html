@@ -725,6 +725,7 @@
       toast.className = `visible ${state}`;
       if (state === "done") toast.dataset.clickable = "";
       else delete toast.dataset.clickable;
+      iina.postMessage("toast-clickable", { on: state === "done" });
       const icon = state === "saving" ? SPINNER : state === "done" ? CHECK : "";
       toast.innerHTML = icon;
       toast.append(Object.assign(document.createElement("span"), { textContent: text }));
@@ -742,6 +743,7 @@
         if (saving.size) return showToast("saving", saving.size > 1 ? `Saving ${saving.size} clips` : "Saving clip");
         toast.classList.remove("visible");
         delete toast.dataset.clickable;
+        iina.postMessage("toast-clickable", { on: false });
         savedPath = null;
         reportIdleSoon();
       }, state === "done" ? 4000 : 3000);

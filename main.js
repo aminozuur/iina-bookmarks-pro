@@ -72,6 +72,7 @@ function withMedia(b, kind, item) {
 function render() {
   if (!bookmarks.length) stackOpen = false;
   if (!overlayReady) return;
+  syncClickable();
   overlay.postMessage("stack", {
     open: stackOpen,
     peek: stackPeek,
@@ -86,13 +87,33 @@ function render() {
   });
 }
 
+// A clickable overlay is risky: for every mouse move over the video, IINA asks the page what's
+// under the pointer and waits for the answer, and when that wait overlaps a window change (the
+// library opening) IINA 1.5 can crash. So the overlay only takes clicks while there's something
+// to click: the open stack, or the "saved" note of a clip.
+let overlayClickable = false;
+let toastClickable = false;
+
+function syncClickable() {
+  const on = stackOpen || toastClickable;
+  if (on === overlayClickable || !overlayReady) return;
+  overlayClickable = on;
+  overlay.setClickable(on); // when on, only elements marked data-clickable take clicks
+}
+
 // IINA ignores overlay listeners until the overlay page has loaded, so register on first use.
 function listenToOverlay() {
   if (overlayListening) return;
-  overlay.setClickable(true); // only elements marked data-clickable take clicks
   overlay.onMessage("seek", ({ time }) => core.seekTo(time));
   overlay.onMessage("remove", ({ id }) => removeBookmark(id));
-  overlay.onMessage("stack-closed", () => (stackOpen = stackPeek = false));
+  overlay.onMessage("stack-closed", () => {
+    stackOpen = stackPeek = false;
+    syncClickable();
+  });
+  overlay.onMessage("toast-clickable", ({ on }) => {
+    toastClickable = on;
+    syncClickable();
+  });
   overlay.onMessage("idle", () => stackOpen || overlay.hide());
   overlay.onMessage("jump", ({ direction }) => jumpBookmark(direction)); // the stack stays open
   overlay.onMessage("show-library", () => standaloneWindow.isOpen() || toggleLibrary());
@@ -578,6 +599,9 @@ const SAVE_DIALOG = [
 async function askWhereToSave(name) {
   const args = SAVE_DIALOG.flatMap((line) => ["-e", line]).concat(name);
   const done = await utils.exec("/usr/bin/osascript", args).catch((e) => ({ status: 1, stderr: String(e) }));
+  // The dialog belongs to osascript, which "activate" brought to the front. Give the front back
+  // to IINA, or the library window can be left unable to take clicks or keys.
+  utils.exec("/usr/bin/osascript", ["-e", 'tell application id "com.colliderli.iina" to activate']).catch(() => {});
   if (done.status === 0) {
     const chosen = done.stdout.trim();
     return chosen.toLowerCase().endsWith(".zip") ? chosen : `${chosen}.zip`;
@@ -717,6 +741,19 @@ function libraryPrefs() {
 
 function toggleLibrary() {
   if (standaloneWindow.isOpen()) return standaloneWindow.close();
+  // Close the stack and stop the overlay taking clicks first, then open the window a moment
+  // later, so it never opens in the middle of the overlay's hit test (see syncClickable).
+  if (overlayClickable) {
+    stackOpen = stackPeek = false;
+    toastClickable = false;
+    render();
+    return setTimeout(openLibrary, 150);
+  }
+  openLibrary();
+}
+
+function openLibrary() {
+  if (standaloneWindow.isOpen()) return;
   standaloneWindow.loadFile("library.html"); // also clears the listeners below, so add them after
   // No title bar: the page fills the window and the window buttons float over its frosted header
   standaloneWindow.setProperty({ title: "Bookmarks Pro", fullSizeContentView: true, hideTitleBar: true });
@@ -821,6 +858,8 @@ function setUpWindow() {
 event.on("iina.plugin-overlay-loaded", () => {
   overlayReady = true;
   sentMedia = new Set();
+  overlay.setClickable(false); // a new page starts out not taking clicks; render() turns them on
+  overlayClickable = toastClickable = false;
   listenToOverlay();
   render();
   sendTrashSound();
